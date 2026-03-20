@@ -9,9 +9,26 @@ let backendCheckPromise: Promise<boolean> | null = null;
 function checkBackend(): Promise<boolean> {
   if (backendCheckPromise) return backendCheckPromise;
   backendCheckPromise = fetch(`${API_BASE}/api/stats`, { method: "GET" })
-    .then((res) => {
-      backendAvailable = res.ok;
-      return res.ok;
+    .then(async (res) => {
+      if (!res.ok) {
+        backendAvailable = false;
+        return false;
+      }
+      // Verify the response is actual JSON from our backend,
+      // not an HTML page returned by a static host's catch-all redirect
+      const contentType = res.headers.get("content-type") || "";
+      if (!contentType.includes("application/json")) {
+        backendAvailable = false;
+        return false;
+      }
+      // Double-check: try parsing as JSON to ensure it's valid
+      try {
+        const data = await res.json();
+        backendAvailable = typeof data.activeRecruitments === "number";
+      } catch {
+        backendAvailable = false;
+      }
+      return backendAvailable;
     })
     .catch(() => {
       backendAvailable = false;
