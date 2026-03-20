@@ -54,7 +54,7 @@ import {
   Plus,
   GripVertical,
 } from "lucide-react";
-import { useState, useMemo, useCallback } from "react";
+import React, { useState, useMemo, useCallback } from "react";
 import { useLocation } from "wouter";
 
 // ─── dnd-kit ────────────────────────────────────────────────────────
@@ -93,6 +93,92 @@ const EMPTY_STEP_FORM = {
   estimatedDays: "1",
   notes: "",
 };
+
+// ─── Step Form Fields (shared between Add and Edit dialogs) ────────
+// Defined at module level so React sees a stable component identity
+// across parent re-renders (prevents input focus loss on keystroke).
+function StepFormFields({
+  form,
+  setForm,
+}: {
+  form: typeof EMPTY_STEP_FORM;
+  setForm: React.Dispatch<React.SetStateAction<typeof EMPTY_STEP_FORM>>;
+}) {
+  return (
+    <div className="space-y-3">
+      <div>
+        <Label className="text-sm font-medium">Title</Label>
+        <Input
+          value={form.title}
+          onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
+          placeholder="e.g., Complete Background Check"
+          data-testid="input-step-title"
+        />
+      </div>
+      <div>
+        <Label className="text-sm font-medium">Description</Label>
+        <Textarea
+          value={form.description}
+          onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+          placeholder="What needs to happen in this step..."
+          className="min-h-[70px]"
+          data-testid="input-step-description"
+        />
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <Label className="text-sm font-medium">Responsible</Label>
+          <Input
+            value={form.responsible}
+            onChange={(e) => setForm((f) => ({ ...f, responsible: e.target.value }))}
+            placeholder="e.g., Dean / HR"
+            data-testid="input-step-responsible"
+          />
+        </div>
+        <div>
+          <Label className="text-sm font-medium">Approver</Label>
+          <Input
+            value={form.approver}
+            onChange={(e) => setForm((f) => ({ ...f, approver: e.target.value }))}
+            placeholder="e.g., College President"
+            data-testid="input-step-approver"
+          />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <Label className="text-sm font-medium">Forms (comma-separated)</Label>
+          <Input
+            value={form.forms}
+            onChange={(e) => setForm((f) => ({ ...f, forms: e.target.value }))}
+            placeholder="e.g., Form A, Form B"
+            data-testid="input-step-forms"
+          />
+        </div>
+        <div>
+          <Label className="text-sm font-medium">Estimated Days</Label>
+          <Input
+            type="number"
+            min="1"
+            value={form.estimatedDays}
+            onChange={(e) => setForm((f) => ({ ...f, estimatedDays: e.target.value }))}
+            data-testid="input-step-days"
+          />
+        </div>
+      </div>
+      <div>
+        <Label className="text-sm font-medium">Notes</Label>
+        <Textarea
+          value={form.notes}
+          onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+          placeholder="Additional notes..."
+          className="min-h-[50px]"
+          data-testid="input-step-notes"
+        />
+      </div>
+    </div>
+  );
+}
 
 // ─── Sortable Step Row Component ────────────────────────────────────
 function SortableStepRow({
@@ -683,89 +769,8 @@ export default function RecruitmentDetail() {
   const totalProgress = data.steps.length > 0 ? (totalCompleted / data.steps.length) * 100 : 0;
   const projectedEnd = data.steps.length > 0 ? data.steps[data.steps.length - 1].projectedEndDate : null;
 
-  // ─── Step Form Fields (shared between Add and Edit dialogs) ────────
-  function StepFormFields({
-    form,
-    setForm,
-  }: {
-    form: typeof EMPTY_STEP_FORM;
-    setForm: React.Dispatch<React.SetStateAction<typeof EMPTY_STEP_FORM>>;
-  }) {
-    return (
-      <div className="space-y-3">
-        <div>
-          <Label className="text-sm font-medium">Title</Label>
-          <Input
-            value={form.title}
-            onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
-            placeholder="e.g., Complete Background Check"
-            data-testid="input-step-title"
-          />
-        </div>
-        <div>
-          <Label className="text-sm font-medium">Description</Label>
-          <Textarea
-            value={form.description}
-            onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-            placeholder="What needs to happen in this step..."
-            className="min-h-[70px]"
-            data-testid="input-step-description"
-          />
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <Label className="text-sm font-medium">Responsible</Label>
-            <Input
-              value={form.responsible}
-              onChange={(e) => setForm((f) => ({ ...f, responsible: e.target.value }))}
-              placeholder="e.g., Dean / HR"
-              data-testid="input-step-responsible"
-            />
-          </div>
-          <div>
-            <Label className="text-sm font-medium">Approver</Label>
-            <Input
-              value={form.approver}
-              onChange={(e) => setForm((f) => ({ ...f, approver: e.target.value }))}
-              placeholder="e.g., College President"
-              data-testid="input-step-approver"
-            />
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <Label className="text-sm font-medium">Forms (comma-separated)</Label>
-            <Input
-              value={form.forms}
-              onChange={(e) => setForm((f) => ({ ...f, forms: e.target.value }))}
-              placeholder="e.g., Form A, Form B"
-              data-testid="input-step-forms"
-            />
-          </div>
-          <div>
-            <Label className="text-sm font-medium">Estimated Days</Label>
-            <Input
-              type="number"
-              min="1"
-              value={form.estimatedDays}
-              onChange={(e) => setForm((f) => ({ ...f, estimatedDays: e.target.value }))}
-              data-testid="input-step-days"
-            />
-          </div>
-        </div>
-        <div>
-          <Label className="text-sm font-medium">Notes</Label>
-          <Textarea
-            value={form.notes}
-            onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
-            placeholder="Additional notes..."
-            className="min-h-[50px]"
-            data-testid="input-step-notes"
-          />
-        </div>
-      </div>
-    );
-  }
+  // StepFormFields is now defined at module level (above) to prevent
+  // focus loss on keystroke caused by React re-creating inner components.
 
   return (
     <div className="space-y-6">
