@@ -465,4 +465,33 @@ export const localStore = {
 
     return { success: true };
   },
+
+  reorderSteps(recruitmentId: number, order: { id: number; stepNumber: number; phase?: string }[]) {
+    const allSteps = load<LocalStep[]>(KEYS.steps, []);
+    const otherSteps = allSteps.filter((s) => s.recruitmentId !== recruitmentId);
+    const mySteps = allSteps.filter((s) => s.recruitmentId === recruitmentId);
+
+    // Apply the new ordering
+    for (const entry of order) {
+      const step = mySteps.find((s) => s.id === entry.id);
+      if (step) {
+        step.stepNumber = entry.stepNumber;
+        if (entry.phase) step.phase = entry.phase;
+      }
+    }
+
+    mySteps.sort((a, b) => a.stepNumber - b.stepNumber);
+
+    // Recalculate projected dates
+    const recruitments = load<LocalRecruitment[]>(KEYS.recruitments, []);
+    const recruitment = recruitments.find((r) => r.id === recruitmentId);
+    if (recruitment) {
+      const recalculated = calculateProjectedDates(recruitment.startDate, mySteps);
+      save(KEYS.steps, [...otherSteps, ...recalculated]);
+    } else {
+      save(KEYS.steps, [...otherSteps, ...mySteps]);
+    }
+
+    return { success: true };
+  },
 };

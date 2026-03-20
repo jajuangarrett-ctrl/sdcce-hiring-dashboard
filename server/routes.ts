@@ -310,6 +310,43 @@ export async function registerRoutes(
     }
   });
 
+  // PATCH /api/recruitments/:id/steps/reorder - reorder steps within a recruitment
+  app.patch("/api/recruitments/:id/steps/reorder", (req, res) => {
+    try {
+      const recruitmentId = parseInt(req.params.id);
+      const recruitment = storage.getRecruitment(recruitmentId);
+      if (!recruitment) {
+        return res.status(404).json({ error: "Recruitment not found" });
+      }
+
+      const { order } = req.body; // array of { id: number, stepNumber: number, phase?: string }
+      if (!Array.isArray(order)) {
+        return res.status(400).json({ error: "order must be an array of { id, stepNumber }" });
+      }
+
+      // Apply each step number + optional phase update
+      for (const entry of order) {
+        const update: any = { stepNumber: entry.stepNumber };
+        if (entry.phase) update.phase = entry.phase;
+        storage.updateStep(entry.id, update);
+      }
+
+      // Recalculate projected dates
+      const allSteps = storage.getStepsForRecruitment(recruitmentId);
+      const stepsWithDates = calculateProjectedDates(recruitment.startDate, allSteps);
+      for (const s of stepsWithDates) {
+        storage.updateStep(s.id, {
+          projectedStartDate: s.projectedStartDate,
+          projectedEndDate: s.projectedEndDate,
+        });
+      }
+
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // PATCH /api/recruitments/:id/steps/:stepId - update a step
   app.patch("/api/recruitments/:id/steps/:stepId", (req, res) => {
     try {

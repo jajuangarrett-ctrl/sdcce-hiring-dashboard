@@ -5,8 +5,6 @@ import type { Recruitment, RecruitmentStep } from "@shared/schema";
 import {
   Card,
   CardContent,
-  CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,7 +12,6 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Separator } from "@/components/ui/separator";
 import { Label } from "@/components/ui/label";
 import {
   Collapsible,
@@ -27,13 +24,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -62,9 +52,32 @@ import {
   Trash2,
   StickyNote,
   Plus,
+  GripVertical,
 } from "lucide-react";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useLocation } from "wouter";
+
+// ─── dnd-kit ────────────────────────────────────────────────────────
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+  DragOverlay,
+} from "@dnd-kit/core";
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+  useSortable,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { restrictToVerticalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
 
 interface RecruitmentWithSteps extends Recruitment {
   steps: RecruitmentStep[];
@@ -81,30 +94,258 @@ const EMPTY_STEP_FORM = {
   notes: "",
 };
 
+// ─── Sortable Step Row Component ────────────────────────────────────
+function SortableStepRow({
+  step,
+  overdue,
+  noteExpanded,
+  editingDays,
+  daysValue,
+  updateStepMutation,
+  onToggle,
+  onEditDaysStart,
+  onDaysChange,
+  onDaysSave,
+  onDaysCancel,
+  onNotesSave,
+  onToggleNotes,
+  onEditStep,
+  onDeleteStep,
+  parseForms,
+  formatDate,
+  getStatusIcon,
+}: {
+  step: RecruitmentStep;
+  overdue: boolean;
+  noteExpanded: boolean;
+  editingDays: number | null;
+  daysValue: string;
+  updateStepMutation: { isPending: boolean };
+  onToggle: () => void;
+  onEditDaysStart: () => void;
+  onDaysChange: (v: string) => void;
+  onDaysSave: () => void;
+  onDaysCancel: () => void;
+  onNotesSave: (notes: string) => void;
+  onToggleNotes: () => void;
+  onEditStep: () => void;
+  onDeleteStep: () => void;
+  parseForms: (forms: string | null) => string[];
+  formatDate: (d: string | null) => string;
+  getStatusIcon: (s: string) => JSX.Element;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: step.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 50 : undefined,
+    position: isDragging ? "relative" as const : undefined,
+  };
+
+  const forms = parseForms(step.forms);
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`px-4 py-3 border-b border-border last:border-b-0 ${
+        step.status === "completed" ? "bg-muted/30" : overdue ? "bg-destructive/5" : ""
+      } ${isDragging ? "opacity-50 bg-muted shadow-lg rounded" : ""}`}
+      data-testid={`step-${step.id}`}
+    >
+      <div className="flex items-start gap-2">
+        {/* Drag Handle */}
+        <button
+          className="mt-1 shrink-0 cursor-grab active:cursor-grabbing touch-none p-0.5 rounded text-muted-foreground/40 hover:text-muted-foreground transition-colors"
+          {...attributes}
+          {...listeners}
+          title="Drag to reorder"
+          data-testid={`drag-handle-${step.id}`}
+        >
+          <GripVertical className="h-4 w-4" />
+        </button>
+
+        {/* Checkbox */}
+        <Checkbox
+          checked={step.status === "completed"}
+          onCheckedChange={onToggle}
+          className="mt-0.5 shrink-0"
+          disabled={updateStepMutation.isPending}
+          data-testid={`checkbox-step-${step.id}`}
+        />
+
+        <div className="flex-1 min-w-0">
+          {/* Title row */}
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span
+                className={`text-sm font-medium ${
+                  step.status === "completed" ? "line-through text-muted-foreground" : ""
+                }`}
+              >
+                <span className="tabular-nums text-muted-foreground mr-1.5">
+                  {step.stepNumber}.
+                </span>
+                {step.title}
+              </span>
+              {overdue && (
+                <Badge variant="destructive" className="text-[9px] uppercase h-4">
+                  Overdue
+                </Badge>
+              )}
+            </div>
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                className="p-1 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                onClick={onEditStep}
+                title="Edit step"
+                data-testid={`button-edit-step-${step.id}`}
+              >
+                <Pencil className="h-3 w-3" />
+              </button>
+              <button
+                className="p-1 rounded hover:bg-destructive/10 transition-colors text-muted-foreground hover:text-destructive"
+                onClick={onDeleteStep}
+                title="Delete step"
+                data-testid={`button-delete-step-${step.id}`}
+              >
+                <Trash2 className="h-3 w-3" />
+              </button>
+              <span className="ml-1">{getStatusIcon(step.status)}</span>
+            </div>
+          </div>
+
+          {/* Description */}
+          {step.description && (
+            <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+              {step.description}
+            </p>
+          )}
+
+          {/* Meta row */}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 mt-2 text-xs text-muted-foreground">
+            {forms.length > 0 && (
+              <div className="flex items-center gap-1 flex-wrap">
+                <FileText className="h-3 w-3 shrink-0" />
+                {forms.map((f) => (
+                  <Badge key={f} variant="outline" className="text-[9px] font-normal h-4 bg-card">
+                    {f}
+                  </Badge>
+                ))}
+              </div>
+            )}
+            {step.responsible && (
+              <span className="flex items-center gap-1">
+                <User className="h-3 w-3" />
+                {step.responsible}
+              </span>
+            )}
+            {step.approver && (
+              <span className="flex items-center gap-1">
+                <Shield className="h-3 w-3" />
+                {step.approver}
+              </span>
+            )}
+            <span className="flex items-center gap-1">
+              <Clock className="h-3 w-3" />
+              {editingDays === step.id ? (
+                <Input
+                  type="number"
+                  value={daysValue}
+                  onChange={(e) => onDaysChange(e.target.value)}
+                  onBlur={onDaysSave}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") onDaysSave();
+                    if (e.key === "Escape") onDaysCancel();
+                  }}
+                  className="h-5 w-12 text-xs tabular-nums p-1"
+                  autoFocus
+                  data-testid={`input-days-${step.id}`}
+                />
+              ) : (
+                <button
+                  className="tabular-nums hover:text-foreground transition-colors underline decoration-dotted"
+                  onClick={onEditDaysStart}
+                  data-testid={`button-edit-days-${step.id}`}
+                >
+                  {step.estimatedDays}d
+                </button>
+              )}
+            </span>
+            {step.projectedStartDate && step.projectedEndDate && (
+              <span className="flex items-center gap-1 tabular-nums">
+                <Calendar className="h-3 w-3" />
+                {formatDate(step.projectedStartDate)} – {formatDate(step.projectedEndDate)}
+              </span>
+            )}
+            {step.completedDate && (
+              <span className="text-emerald-600 dark:text-emerald-400 tabular-nums">
+                Done {formatDate(step.completedDate)}
+              </span>
+            )}
+          </div>
+
+          {/* Notes */}
+          <div className="mt-2">
+            <button
+              className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"
+              onClick={onToggleNotes}
+              data-testid={`button-notes-${step.id}`}
+            >
+              <StickyNote className="h-3 w-3" />
+              {step.notes ? "View/Edit Notes" : "Add Note"}
+            </button>
+            {noteExpanded && (
+              <Textarea
+                className="mt-1.5 text-xs min-h-[60px]"
+                placeholder="Add notes for this step..."
+                defaultValue={step.notes || ""}
+                onBlur={(e) => onNotesSave(e.target.value)}
+                data-testid={`textarea-notes-${step.id}`}
+              />
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// Main Component
+// ═════════════════════════════════════════════════════════════════════
+
 export default function RecruitmentDetail() {
   const params = useParams<{ id: string }>();
   const id = parseInt(params.id || "0");
   const { toast } = useToast();
   const [, navigate] = useLocation();
   const [openPhases, setOpenPhases] = useState<Set<string>>(new Set());
-  const [editingField, setEditingField] = useState<string | null>(null);
-  const [editValues, setEditValues] = useState<Record<string, string>>({});
   const [expandedNotes, setExpandedNotes] = useState<Set<number>>(new Set());
   const [editingDays, setEditingDays] = useState<number | null>(null);
   const [daysValue, setDaysValue] = useState("");
   const [editDialog, setEditDialog] = useState(false);
   const [editForm, setEditForm] = useState({ title: "", department: "", startDate: "", notes: "" });
-
-  // ── Add Step state ──
   const [addStepPhase, setAddStepPhase] = useState<string | null>(null);
   const [addStepForm, setAddStepForm] = useState(EMPTY_STEP_FORM);
-
-  // ── Edit Step state ──
   const [editStepTarget, setEditStepTarget] = useState<RecruitmentStep | null>(null);
   const [editStepForm, setEditStepForm] = useState(EMPTY_STEP_FORM);
-
-  // ── Delete Step state ──
   const [deleteStepTarget, setDeleteStepTarget] = useState<RecruitmentStep | null>(null);
+  const [activeDragId, setActiveDragId] = useState<number | null>(null);
+
+  // ─── DnD sensors ──────────────────────────────────────────────────
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
 
   const { data, isLoading } = useQuery<RecruitmentWithSteps>({
     queryKey: ["/api/recruitments", id],
@@ -163,6 +404,17 @@ export default function RecruitmentDetail() {
     },
   });
 
+  const reorderMutation = useMutation({
+    mutationFn: async (order: { id: number; stepNumber: number }[]) => {
+      const res = await apiRequest("PATCH", `/api/recruitments/${id}/steps/reorder`, { order });
+      return res.json();
+    },
+    onSuccess: () => {
+      invalidateAll();
+      toast({ title: "Steps reordered" });
+    },
+  });
+
   const updateRecruitmentMutation = useMutation({
     mutationFn: async (body: any) => {
       const res = await apiRequest("PATCH", `/api/recruitments/${id}`, body);
@@ -200,7 +452,7 @@ export default function RecruitmentDetail() {
       phaseMap.get(step.phase)!.push(step);
     }
     for (const [phase, steps] of phaseMap) {
-      groups.push({ phase, steps });
+      groups.push({ phase, steps: steps.sort((a, b) => a.stepNumber - b.stepNumber) });
     }
     return groups;
   }, [data?.steps]);
@@ -244,10 +496,7 @@ export default function RecruitmentDetail() {
 
   function handleAddStepSubmit() {
     if (!addStepPhase || !addStepForm.title.trim()) return;
-    const formsArray = addStepForm.forms
-      .split(",")
-      .map((f) => f.trim())
-      .filter(Boolean);
+    const formsArray = addStepForm.forms.split(",").map((f) => f.trim()).filter(Boolean);
     createStepMutation.mutate({
       phase: addStepPhase,
       title: addStepForm.title.trim(),
@@ -265,9 +514,7 @@ export default function RecruitmentDetail() {
     try {
       const arr = JSON.parse(step.forms || "[]");
       formsStr = Array.isArray(arr) ? arr.join(", ") : "";
-    } catch {
-      formsStr = "";
-    }
+    } catch { formsStr = ""; }
     setEditStepForm({
       title: step.title,
       description: step.description || "",
@@ -282,10 +529,7 @@ export default function RecruitmentDetail() {
 
   function handleEditStepSubmit() {
     if (!editStepTarget || !editStepForm.title.trim()) return;
-    const formsArray = editStepForm.forms
-      .split(",")
-      .map((f) => f.trim())
-      .filter(Boolean);
+    const formsArray = editStepForm.forms.split(",").map((f) => f.trim()).filter(Boolean);
     editStepMutation.mutate({
       stepId: editStepTarget.id,
       body: {
@@ -299,6 +543,59 @@ export default function RecruitmentDetail() {
       },
     });
   }
+
+  // ─── DnD handlers ─────────────────────────────────────────────────
+  const handleDragStart = useCallback((event: DragStartEvent) => {
+    setActiveDragId(event.active.id as number);
+  }, []);
+
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent, phaseSteps: RecruitmentStep[], allSteps: RecruitmentStep[]) => {
+      setActiveDragId(null);
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+
+      const oldIndex = phaseSteps.findIndex((s) => s.id === active.id);
+      const newIndex = phaseSteps.findIndex((s) => s.id === over.id);
+      if (oldIndex === -1 || newIndex === -1) return;
+
+      const reordered = arrayMove(phaseSteps, oldIndex, newIndex);
+
+      // Build the full new ordering for ALL steps in this recruitment.
+      // Steps in other phases keep their relative order; the moved phase gets new numbers.
+      const otherSteps = allSteps.filter((s) => !reordered.some((r) => r.id === s.id));
+      // Sort other steps by stepNumber
+      otherSteps.sort((a, b) => a.stepNumber - b.stepNumber);
+
+      // Merge: we need to figure out where this phase sits in the global order.
+      // The first step of the phase in the original data tells us the starting global position.
+      const phaseStartGlobal = phaseSteps[0].stepNumber;
+
+      // Build the full ordered list:
+      // 1. All steps before this phase (stepNumber < phaseStartGlobal)
+      // 2. The reordered phase steps
+      // 3. All steps after this phase (stepNumber > last step of phase)
+      const phaseEndGlobal = phaseSteps[phaseSteps.length - 1].stepNumber;
+      const beforePhase = otherSteps.filter((s) => s.stepNumber < phaseStartGlobal);
+      const afterPhase = otherSteps.filter((s) => s.stepNumber > phaseEndGlobal);
+
+      const fullOrder: { id: number; stepNumber: number }[] = [];
+      let num = 1;
+
+      for (const s of beforePhase) {
+        fullOrder.push({ id: s.id, stepNumber: num++ });
+      }
+      for (const s of reordered) {
+        fullOrder.push({ id: s.id, stepNumber: num++ });
+      }
+      for (const s of afterPhase) {
+        fullOrder.push({ id: s.id, stepNumber: num++ });
+      }
+
+      reorderMutation.mutate(fullOrder);
+    },
+    [reorderMutation]
+  );
 
   function formatDate(dateStr: string | null) {
     if (!dateStr) return "—";
@@ -545,8 +842,6 @@ export default function RecruitmentDetail() {
               style={{ width: `${totalProgress}%` }}
             />
           </div>
-
-          {/* Phase timeline bar */}
           <div className="flex gap-1 h-6 rounded overflow-hidden">
             {phaseGroups.map((group) => {
               const prog = getPhaseProgress(group.steps);
@@ -583,6 +878,8 @@ export default function RecruitmentDetail() {
         {phaseGroups.map((group) => {
           const prog = getPhaseProgress(group.steps);
           const isOpen = openPhases.has(group.phase);
+          const stepIds = group.steps.map((s) => s.id);
+
           return (
             <Card key={group.phase} className="border border-border overflow-hidden" data-testid={`phase-${group.phase.replace(/\s+/g, "-").toLowerCase()}`}>
               <Collapsible open={isOpen} onOpenChange={() => togglePhase(group.phase)}>
@@ -608,193 +905,51 @@ export default function RecruitmentDetail() {
                 </CollapsibleTrigger>
                 <CollapsibleContent>
                   <div className="border-t border-border">
-                    {group.steps.map((step) => {
-                      const forms = parseForms(step.forms);
-                      const overdue = isOverdue(step);
-                      const noteExpanded = expandedNotes.has(step.id);
+                    <DndContext
+                      sensors={sensors}
+                      collisionDetection={closestCenter}
+                      onDragStart={handleDragStart}
+                      onDragEnd={(event) => handleDragEnd(event, group.steps, data.steps)}
+                      modifiers={[restrictToVerticalAxis]}
+                    >
+                      <SortableContext items={stepIds} strategy={verticalListSortingStrategy}>
+                        {group.steps.map((step) => (
+                          <SortableStepRow
+                            key={step.id}
+                            step={step}
+                            overdue={isOverdue(step)}
+                            noteExpanded={expandedNotes.has(step.id)}
+                            editingDays={editingDays}
+                            daysValue={daysValue}
+                            updateStepMutation={updateStepMutation}
+                            onToggle={() => handleStepToggle(step)}
+                            onEditDaysStart={() => {
+                              setEditingDays(step.id);
+                              setDaysValue(String(step.estimatedDays));
+                            }}
+                            onDaysChange={setDaysValue}
+                            onDaysSave={() => handleDaysSave(step.id)}
+                            onDaysCancel={() => setEditingDays(null)}
+                            onNotesSave={(notes) => handleStepNotesSave(step.id, notes)}
+                            onToggleNotes={() => {
+                              setExpandedNotes((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(step.id)) next.delete(step.id);
+                                else next.add(step.id);
+                                return next;
+                              });
+                            }}
+                            onEditStep={() => openEditStep(step)}
+                            onDeleteStep={() => setDeleteStepTarget(step)}
+                            parseForms={parseForms}
+                            formatDate={formatDate}
+                            getStatusIcon={getStatusIcon}
+                          />
+                        ))}
+                      </SortableContext>
+                    </DndContext>
 
-                      return (
-                        <div
-                          key={step.id}
-                          className={`px-4 py-3 border-b border-border last:border-b-0 ${
-                            step.status === "completed" ? "bg-muted/30" : overdue ? "bg-destructive/5" : ""
-                          }`}
-                          data-testid={`step-${step.id}`}
-                        >
-                          <div className="flex items-start gap-3">
-                            {/* Checkbox */}
-                            <Checkbox
-                              checked={step.status === "completed"}
-                              onCheckedChange={() => handleStepToggle(step)}
-                              className="mt-0.5 shrink-0"
-                              disabled={updateStepMutation.isPending}
-                              data-testid={`checkbox-step-${step.id}`}
-                            />
-
-                            <div className="flex-1 min-w-0">
-                              {/* Title row */}
-                              <div className="flex items-start justify-between gap-2">
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  <span
-                                    className={`text-sm font-medium ${
-                                      step.status === "completed" ? "line-through text-muted-foreground" : ""
-                                    }`}
-                                  >
-                                    <span className="tabular-nums text-muted-foreground mr-1.5">
-                                      {step.stepNumber}.
-                                    </span>
-                                    {step.title}
-                                  </span>
-                                  {overdue && (
-                                    <Badge variant="destructive" className="text-[9px] uppercase h-4">
-                                      Overdue
-                                    </Badge>
-                                  )}
-                                </div>
-                                <div className="flex items-center gap-1 shrink-0">
-                                  {/* Edit Step button */}
-                                  <button
-                                    className="p-1 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
-                                    onClick={() => openEditStep(step)}
-                                    title="Edit step"
-                                    data-testid={`button-edit-step-${step.id}`}
-                                  >
-                                    <Pencil className="h-3 w-3" />
-                                  </button>
-                                  {/* Delete Step button */}
-                                  <button
-                                    className="p-1 rounded hover:bg-destructive/10 transition-colors text-muted-foreground hover:text-destructive"
-                                    onClick={() => setDeleteStepTarget(step)}
-                                    title="Delete step"
-                                    data-testid={`button-delete-step-${step.id}`}
-                                  >
-                                    <Trash2 className="h-3 w-3" />
-                                  </button>
-                                  <span className="ml-1">{getStatusIcon(step.status)}</span>
-                                </div>
-                              </div>
-
-                              {/* Description */}
-                              {step.description && (
-                                <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-                                  {step.description}
-                                </p>
-                              )}
-
-                              {/* Meta row */}
-                              <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 mt-2 text-xs text-muted-foreground">
-                                {/* Forms */}
-                                {forms.length > 0 && (
-                                  <div className="flex items-center gap-1 flex-wrap">
-                                    <FileText className="h-3 w-3 shrink-0" />
-                                    {forms.map((f) => (
-                                      <Badge
-                                        key={f}
-                                        variant="outline"
-                                        className="text-[9px] font-normal h-4 bg-card"
-                                      >
-                                        {f}
-                                      </Badge>
-                                    ))}
-                                  </div>
-                                )}
-
-                                {/* Responsible */}
-                                {step.responsible && (
-                                  <span className="flex items-center gap-1">
-                                    <User className="h-3 w-3" />
-                                    {step.responsible}
-                                  </span>
-                                )}
-
-                                {/* Approver */}
-                                {step.approver && (
-                                  <span className="flex items-center gap-1">
-                                    <Shield className="h-3 w-3" />
-                                    {step.approver}
-                                  </span>
-                                )}
-
-                                {/* Estimated Days (editable) */}
-                                <span className="flex items-center gap-1">
-                                  <Clock className="h-3 w-3" />
-                                  {editingDays === step.id ? (
-                                    <Input
-                                      type="number"
-                                      value={daysValue}
-                                      onChange={(e) => setDaysValue(e.target.value)}
-                                      onBlur={() => handleDaysSave(step.id)}
-                                      onKeyDown={(e) => {
-                                        if (e.key === "Enter") handleDaysSave(step.id);
-                                        if (e.key === "Escape") setEditingDays(null);
-                                      }}
-                                      className="h-5 w-12 text-xs tabular-nums p-1"
-                                      autoFocus
-                                      data-testid={`input-days-${step.id}`}
-                                    />
-                                  ) : (
-                                    <button
-                                      className="tabular-nums hover:text-foreground transition-colors underline decoration-dotted"
-                                      onClick={() => {
-                                        setEditingDays(step.id);
-                                        setDaysValue(String(step.estimatedDays));
-                                      }}
-                                      data-testid={`button-edit-days-${step.id}`}
-                                    >
-                                      {step.estimatedDays}d
-                                    </button>
-                                  )}
-                                </span>
-
-                                {/* Projected dates */}
-                                {step.projectedStartDate && step.projectedEndDate && (
-                                  <span className="flex items-center gap-1 tabular-nums">
-                                    <Calendar className="h-3 w-3" />
-                                    {formatDate(step.projectedStartDate)} – {formatDate(step.projectedEndDate)}
-                                  </span>
-                                )}
-
-                                {step.completedDate && (
-                                  <span className="text-emerald-600 dark:text-emerald-400 tabular-nums">
-                                    Done {formatDate(step.completedDate)}
-                                  </span>
-                                )}
-                              </div>
-
-                              {/* Notes */}
-                              <div className="mt-2">
-                                <button
-                                  className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"
-                                  onClick={() => {
-                                    setExpandedNotes((prev) => {
-                                      const next = new Set(prev);
-                                      if (next.has(step.id)) next.delete(step.id);
-                                      else next.add(step.id);
-                                      return next;
-                                    });
-                                  }}
-                                  data-testid={`button-notes-${step.id}`}
-                                >
-                                  <StickyNote className="h-3 w-3" />
-                                  {step.notes ? "View/Edit Notes" : "Add Note"}
-                                </button>
-                                {noteExpanded && (
-                                  <Textarea
-                                    className="mt-1.5 text-xs min-h-[60px]"
-                                    placeholder="Add notes for this step..."
-                                    defaultValue={step.notes || ""}
-                                    onBlur={(e) => handleStepNotesSave(step.id, e.target.value)}
-                                    data-testid={`textarea-notes-${step.id}`}
-                                  />
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-
-                    {/* ── Add Step button at bottom of each phase ── */}
+                    {/* Add Step button */}
                     <div className="px-4 py-2 bg-muted/20 border-t border-border">
                       <Button
                         variant="ghost"
@@ -829,44 +984,23 @@ export default function RecruitmentDetail() {
           <div className="space-y-4 mt-2">
             <div>
               <Label className="text-sm font-medium mb-1 block">Title</Label>
-              <Input
-                value={editForm.title}
-                onChange={(e) => setEditForm((f) => ({ ...f, title: e.target.value }))}
-                data-testid="input-edit-title"
-              />
+              <Input value={editForm.title} onChange={(e) => setEditForm((f) => ({ ...f, title: e.target.value }))} data-testid="input-edit-title" />
             </div>
             <div>
               <Label className="text-sm font-medium mb-1 block">Department</Label>
-              <Input
-                value={editForm.department}
-                onChange={(e) => setEditForm((f) => ({ ...f, department: e.target.value }))}
-                data-testid="input-edit-department"
-              />
+              <Input value={editForm.department} onChange={(e) => setEditForm((f) => ({ ...f, department: e.target.value }))} data-testid="input-edit-department" />
             </div>
             <div>
               <Label className="text-sm font-medium mb-1 block">Start Date</Label>
-              <Input
-                type="date"
-                value={editForm.startDate}
-                onChange={(e) => setEditForm((f) => ({ ...f, startDate: e.target.value }))}
-                data-testid="input-edit-start-date"
-              />
+              <Input type="date" value={editForm.startDate} onChange={(e) => setEditForm((f) => ({ ...f, startDate: e.target.value }))} data-testid="input-edit-start-date" />
             </div>
             <div>
               <Label className="text-sm font-medium mb-1 block">Notes</Label>
-              <Textarea
-                value={editForm.notes}
-                onChange={(e) => setEditForm((f) => ({ ...f, notes: e.target.value }))}
-                data-testid="input-edit-notes"
-              />
+              <Textarea value={editForm.notes} onChange={(e) => setEditForm((f) => ({ ...f, notes: e.target.value }))} data-testid="input-edit-notes" />
             </div>
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setEditDialog(false)}>Cancel</Button>
-              <Button
-                onClick={() => updateRecruitmentMutation.mutate(editForm)}
-                disabled={updateRecruitmentMutation.isPending}
-                data-testid="button-save-edit"
-              >
+              <Button onClick={() => updateRecruitmentMutation.mutate(editForm)} disabled={updateRecruitmentMutation.isPending} data-testid="button-save-edit">
                 {updateRecruitmentMutation.isPending ? "Saving..." : "Save Changes"}
               </Button>
             </div>
@@ -886,11 +1020,7 @@ export default function RecruitmentDetail() {
             <StepFormFields form={addStepForm} setForm={setAddStepForm} />
             <div className="flex justify-end gap-2 mt-4">
               <Button variant="outline" onClick={() => setAddStepPhase(null)}>Cancel</Button>
-              <Button
-                onClick={handleAddStepSubmit}
-                disabled={createStepMutation.isPending || !addStepForm.title.trim()}
-                data-testid="button-save-add-step"
-              >
+              <Button onClick={handleAddStepSubmit} disabled={createStepMutation.isPending || !addStepForm.title.trim()} data-testid="button-save-add-step">
                 {createStepMutation.isPending ? "Adding..." : "Add Step"}
               </Button>
             </div>
@@ -910,11 +1040,7 @@ export default function RecruitmentDetail() {
             <StepFormFields form={editStepForm} setForm={setEditStepForm} />
             <div className="flex justify-end gap-2 mt-4">
               <Button variant="outline" onClick={() => setEditStepTarget(null)}>Cancel</Button>
-              <Button
-                onClick={handleEditStepSubmit}
-                disabled={editStepMutation.isPending || !editStepForm.title.trim()}
-                data-testid="button-save-edit-step"
-              >
+              <Button onClick={handleEditStepSubmit} disabled={editStepMutation.isPending || !editStepForm.title.trim()} data-testid="button-save-edit-step">
                 {editStepMutation.isPending ? "Saving..." : "Save Changes"}
               </Button>
             </div>
@@ -935,11 +1061,7 @@ export default function RecruitmentDetail() {
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={() => {
-                if (deleteStepTarget) {
-                  deleteStepMutation.mutate(deleteStepTarget.id);
-                }
-              }}
+              onClick={() => { if (deleteStepTarget) deleteStepMutation.mutate(deleteStepTarget.id); }}
               data-testid="button-confirm-delete-step"
             >
               {deleteStepMutation.isPending ? "Deleting..." : "Delete"}

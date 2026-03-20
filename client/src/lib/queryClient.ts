@@ -79,6 +79,12 @@ async function routeLocal(method: string, url: string, data?: unknown): Promise<
     return store.createStep(parseInt(createStepMatch[1]), data as any);
   }
 
+  // PATCH /api/recruitments/:id/steps/reorder — reorder steps
+  const reorderMatch = url.match(/^\/api\/recruitments\/(\d+)\/steps\/reorder$/);
+  if (method === "PATCH" && reorderMatch) {
+    return store.reorderSteps(parseInt(reorderMatch[1]), (data as any).order);
+  }
+
   const stepMatch = url.match(/^\/api\/recruitments\/(\d+)\/steps\/(\d+)$/);
   if (stepMatch) {
     const rId = parseInt(stepMatch[1]);
