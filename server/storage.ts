@@ -29,6 +29,7 @@ export interface IStorage {
   createStep(data: InsertRecruitmentStep): RecruitmentStep;
   createSteps(data: InsertRecruitmentStep[]): RecruitmentStep[];
   updateStep(id: number, data: Partial<InsertRecruitmentStep>): RecruitmentStep | undefined;
+  deleteStep(id: number): void;
 
   // Stats
   getStats(): {
@@ -89,6 +90,10 @@ export class DatabaseStorage implements IStorage {
 
   updateStep(id: number, data: Partial<InsertRecruitmentStep>): RecruitmentStep | undefined {
     return db.update(recruitmentSteps).set(data).where(eq(recruitmentSteps.id, id)).returning().get();
+  }
+
+  deleteStep(id: number): void {
+    db.delete(recruitmentSteps).where(eq(recruitmentSteps.id, id)).run();
   }
 
   getStats(): {

@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
+import { Label } from "@/components/ui/label";
 import {
   Collapsible,
   CollapsibleContent,
@@ -25,7 +26,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import {
   Select,
@@ -34,6 +34,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import {
   ArrowLeft,
@@ -51,6 +61,7 @@ import {
   Pencil,
   Trash2,
   StickyNote,
+  Plus,
 } from "lucide-react";
 import { useState, useMemo } from "react";
 import { useLocation } from "wouter";
@@ -58,6 +69,17 @@ import { useLocation } from "wouter";
 interface RecruitmentWithSteps extends Recruitment {
   steps: RecruitmentStep[];
 }
+
+// ─── Default form state for add/edit step ─────────────────────────────
+const EMPTY_STEP_FORM = {
+  title: "",
+  description: "",
+  responsible: "",
+  approver: "",
+  forms: "",
+  estimatedDays: "1",
+  notes: "",
+};
 
 export default function RecruitmentDetail() {
   const params = useParams<{ id: string }>();
@@ -73,19 +95,71 @@ export default function RecruitmentDetail() {
   const [editDialog, setEditDialog] = useState(false);
   const [editForm, setEditForm] = useState({ title: "", department: "", startDate: "", notes: "" });
 
+  // ── Add Step state ──
+  const [addStepPhase, setAddStepPhase] = useState<string | null>(null);
+  const [addStepForm, setAddStepForm] = useState(EMPTY_STEP_FORM);
+
+  // ── Edit Step state ──
+  const [editStepTarget, setEditStepTarget] = useState<RecruitmentStep | null>(null);
+  const [editStepForm, setEditStepForm] = useState(EMPTY_STEP_FORM);
+
+  // ── Delete Step state ──
+  const [deleteStepTarget, setDeleteStepTarget] = useState<RecruitmentStep | null>(null);
+
   const { data, isLoading } = useQuery<RecruitmentWithSteps>({
     queryKey: ["/api/recruitments", id],
   });
+
+  // ─── Mutations ─────────────────────────────────────────────────────
+
+  const invalidateAll = () => {
+    queryClient.invalidateQueries({ queryKey: ["/api/recruitments", id] });
+    queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/recruitments"] });
+  };
 
   const updateStepMutation = useMutation({
     mutationFn: async ({ stepId, body }: { stepId: number; body: any }) => {
       const res = await apiRequest("PATCH", `/api/recruitments/${id}/steps/${stepId}`, body);
       return res.json();
     },
+    onSuccess: invalidateAll,
+  });
+
+  const createStepMutation = useMutation({
+    mutationFn: async (body: any) => {
+      const res = await apiRequest("POST", `/api/recruitments/${id}/steps`, body);
+      return res.json();
+    },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/recruitments", id] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/recruitments"] });
+      invalidateAll();
+      setAddStepPhase(null);
+      setAddStepForm(EMPTY_STEP_FORM);
+      toast({ title: "Step added" });
+    },
+  });
+
+  const deleteStepMutation = useMutation({
+    mutationFn: async (stepId: number) => {
+      const res = await apiRequest("DELETE", `/api/recruitments/${id}/steps/${stepId}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      invalidateAll();
+      setDeleteStepTarget(null);
+      toast({ title: "Step deleted" });
+    },
+  });
+
+  const editStepMutation = useMutation({
+    mutationFn: async ({ stepId, body }: { stepId: number; body: any }) => {
+      const res = await apiRequest("PATCH", `/api/recruitments/${id}/steps/${stepId}`, body);
+      return res.json();
+    },
+    onSuccess: () => {
+      invalidateAll();
+      setEditStepTarget(null);
+      toast({ title: "Step updated" });
     },
   });
 
@@ -95,8 +169,7 @@ export default function RecruitmentDetail() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/recruitments", id] });
-      queryClient.invalidateQueries({ queryKey: ["/api/recruitments"] });
+      invalidateAll();
       setEditDialog(false);
       toast({ title: "Recruitment updated" });
     },
@@ -114,7 +187,8 @@ export default function RecruitmentDetail() {
     },
   });
 
-  // Group steps by phase
+  // ─── Helpers ───────────────────────────────────────────────────────
+
   const phaseGroups = useMemo(() => {
     if (!data?.steps) return [];
     const groups: { phase: string; steps: RecruitmentStep[] }[] = [];
@@ -131,7 +205,6 @@ export default function RecruitmentDetail() {
     return groups;
   }, [data?.steps]);
 
-  // Auto-expand current phase on load
   useMemo(() => {
     if (phaseGroups.length > 0 && openPhases.size === 0) {
       const current = phaseGroups.find((g) =>
@@ -146,11 +219,8 @@ export default function RecruitmentDetail() {
   function togglePhase(phase: string) {
     setOpenPhases((prev) => {
       const next = new Set(prev);
-      if (next.has(phase)) {
-        next.delete(phase);
-      } else {
-        next.add(phase);
-      }
+      if (next.has(phase)) next.delete(phase);
+      else next.add(phase);
       return next;
     });
   }
@@ -172,21 +242,72 @@ export default function RecruitmentDetail() {
     updateStepMutation.mutate({ stepId, body: { notes } });
   }
 
+  function handleAddStepSubmit() {
+    if (!addStepPhase || !addStepForm.title.trim()) return;
+    const formsArray = addStepForm.forms
+      .split(",")
+      .map((f) => f.trim())
+      .filter(Boolean);
+    createStepMutation.mutate({
+      phase: addStepPhase,
+      title: addStepForm.title.trim(),
+      description: addStepForm.description.trim() || null,
+      responsible: addStepForm.responsible.trim() || null,
+      approver: addStepForm.approver.trim() || null,
+      forms: formsArray,
+      estimatedDays: parseInt(addStepForm.estimatedDays) || 1,
+      notes: addStepForm.notes.trim() || null,
+    });
+  }
+
+  function openEditStep(step: RecruitmentStep) {
+    let formsStr = "";
+    try {
+      const arr = JSON.parse(step.forms || "[]");
+      formsStr = Array.isArray(arr) ? arr.join(", ") : "";
+    } catch {
+      formsStr = "";
+    }
+    setEditStepForm({
+      title: step.title,
+      description: step.description || "",
+      responsible: step.responsible || "",
+      approver: step.approver || "",
+      forms: formsStr,
+      estimatedDays: String(step.estimatedDays),
+      notes: step.notes || "",
+    });
+    setEditStepTarget(step);
+  }
+
+  function handleEditStepSubmit() {
+    if (!editStepTarget || !editStepForm.title.trim()) return;
+    const formsArray = editStepForm.forms
+      .split(",")
+      .map((f) => f.trim())
+      .filter(Boolean);
+    editStepMutation.mutate({
+      stepId: editStepTarget.id,
+      body: {
+        title: editStepForm.title.trim(),
+        description: editStepForm.description.trim() || null,
+        responsible: editStepForm.responsible.trim() || null,
+        approver: editStepForm.approver.trim() || null,
+        forms: JSON.stringify(formsArray),
+        estimatedDays: parseInt(editStepForm.estimatedDays) || 1,
+        notes: editStepForm.notes.trim() || null,
+      },
+    });
+  }
+
   function formatDate(dateStr: string | null) {
     if (!dateStr) return "—";
-    return new Date(dateStr).toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-    });
+    return new Date(dateStr).toLocaleDateString("en-US", { month: "short", day: "numeric" });
   }
 
   function formatDateLong(dateStr: string | null) {
     if (!dateStr) return "—";
-    return new Date(dateStr).toLocaleDateString("en-US", {
-      month: "long",
-      day: "numeric",
-      year: "numeric",
-    });
+    return new Date(dateStr).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
   }
 
   function getStatusIcon(status: string) {
@@ -210,8 +331,11 @@ export default function RecruitmentDetail() {
   function getPhaseColor(phase: string) {
     const map: Record<string, string> = {
       "Pre-Recruitment": "bg-chart-1",
+      "Position Approval": "bg-chart-1",
       "Posting & Committee Formation": "bg-chart-2",
+      "Recruitment Preparation": "bg-chart-2",
       "Screening": "bg-chart-3",
+      "Screening & Tally": "bg-chart-3",
       "Interviews": "bg-chart-5",
       "Selection & Offer": "bg-accent",
       "Onboarding (HR Takes Over)": "bg-emerald-500",
@@ -221,17 +345,15 @@ export default function RecruitmentDetail() {
 
   function parseForms(forms: string | null): string[] {
     if (!forms) return [];
-    try {
-      return JSON.parse(forms);
-    } catch {
-      return [];
-    }
+    try { return JSON.parse(forms); } catch { return []; }
   }
 
   function isOverdue(step: RecruitmentStep) {
     if (step.status === "completed" || !step.projectedEndDate) return false;
     return new Date(step.projectedEndDate) < new Date();
   }
+
+  // ─── Render ────────────────────────────────────────────────────────
 
   if (isLoading) {
     return (
@@ -261,8 +383,92 @@ export default function RecruitmentDetail() {
   }
 
   const totalCompleted = data.steps.filter((s) => s.status === "completed").length;
-  const totalProgress = (totalCompleted / data.steps.length) * 100;
+  const totalProgress = data.steps.length > 0 ? (totalCompleted / data.steps.length) * 100 : 0;
   const projectedEnd = data.steps.length > 0 ? data.steps[data.steps.length - 1].projectedEndDate : null;
+
+  // ─── Step Form Fields (shared between Add and Edit dialogs) ────────
+  function StepFormFields({
+    form,
+    setForm,
+  }: {
+    form: typeof EMPTY_STEP_FORM;
+    setForm: React.Dispatch<React.SetStateAction<typeof EMPTY_STEP_FORM>>;
+  }) {
+    return (
+      <div className="space-y-3">
+        <div>
+          <Label className="text-sm font-medium">Title</Label>
+          <Input
+            value={form.title}
+            onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
+            placeholder="e.g., Complete Background Check"
+            data-testid="input-step-title"
+          />
+        </div>
+        <div>
+          <Label className="text-sm font-medium">Description</Label>
+          <Textarea
+            value={form.description}
+            onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+            placeholder="What needs to happen in this step..."
+            className="min-h-[70px]"
+            data-testid="input-step-description"
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Label className="text-sm font-medium">Responsible</Label>
+            <Input
+              value={form.responsible}
+              onChange={(e) => setForm((f) => ({ ...f, responsible: e.target.value }))}
+              placeholder="e.g., Dean / HR"
+              data-testid="input-step-responsible"
+            />
+          </div>
+          <div>
+            <Label className="text-sm font-medium">Approver</Label>
+            <Input
+              value={form.approver}
+              onChange={(e) => setForm((f) => ({ ...f, approver: e.target.value }))}
+              placeholder="e.g., College President"
+              data-testid="input-step-approver"
+            />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Label className="text-sm font-medium">Forms (comma-separated)</Label>
+            <Input
+              value={form.forms}
+              onChange={(e) => setForm((f) => ({ ...f, forms: e.target.value }))}
+              placeholder="e.g., Form A, Form B"
+              data-testid="input-step-forms"
+            />
+          </div>
+          <div>
+            <Label className="text-sm font-medium">Estimated Days</Label>
+            <Input
+              type="number"
+              min="1"
+              value={form.estimatedDays}
+              onChange={(e) => setForm((f) => ({ ...f, estimatedDays: e.target.value }))}
+              data-testid="input-step-days"
+            />
+          </div>
+        </div>
+        <div>
+          <Label className="text-sm font-medium">Notes</Label>
+          <Textarea
+            value={form.notes}
+            onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+            placeholder="Additional notes..."
+            className="min-h-[50px]"
+            data-testid="input-step-notes"
+          />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -445,8 +651,26 @@ export default function RecruitmentDetail() {
                                     </Badge>
                                   )}
                                 </div>
-                                <div className="flex items-center gap-1.5 shrink-0">
-                                  {getStatusIcon(step.status)}
+                                <div className="flex items-center gap-1 shrink-0">
+                                  {/* Edit Step button */}
+                                  <button
+                                    className="p-1 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                                    onClick={() => openEditStep(step)}
+                                    title="Edit step"
+                                    data-testid={`button-edit-step-${step.id}`}
+                                  >
+                                    <Pencil className="h-3 w-3" />
+                                  </button>
+                                  {/* Delete Step button */}
+                                  <button
+                                    className="p-1 rounded hover:bg-destructive/10 transition-colors text-muted-foreground hover:text-destructive"
+                                    onClick={() => setDeleteStepTarget(step)}
+                                    title="Delete step"
+                                    data-testid={`button-delete-step-${step.id}`}
+                                  >
+                                    <Trash2 className="h-3 w-3" />
+                                  </button>
+                                  <span className="ml-1">{getStatusIcon(step.status)}</span>
                                 </div>
                               </div>
 
@@ -569,6 +793,23 @@ export default function RecruitmentDetail() {
                         </div>
                       );
                     })}
+
+                    {/* ── Add Step button at bottom of each phase ── */}
+                    <div className="px-4 py-2 bg-muted/20 border-t border-border">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-xs text-muted-foreground hover:text-foreground gap-1.5 h-7"
+                        onClick={() => {
+                          setAddStepForm(EMPTY_STEP_FORM);
+                          setAddStepPhase(group.phase);
+                        }}
+                        data-testid={`button-add-step-${group.phase.replace(/\s+/g, "-").toLowerCase()}`}
+                      >
+                        <Plus className="h-3 w-3" />
+                        Add Step to {group.phase.split("(")[0].trim()}
+                      </Button>
+                    </div>
                   </div>
                 </CollapsibleContent>
               </Collapsible>
@@ -577,7 +818,9 @@ export default function RecruitmentDetail() {
         })}
       </div>
 
-      {/* Edit Dialog */}
+      {/* ═══════════════ DIALOGS ═══════════════ */}
+
+      {/* Edit Recruitment Dialog */}
       <Dialog open={editDialog} onOpenChange={setEditDialog}>
         <DialogContent>
           <DialogHeader>
@@ -585,7 +828,7 @@ export default function RecruitmentDetail() {
           </DialogHeader>
           <div className="space-y-4 mt-2">
             <div>
-              <label className="text-sm font-medium mb-1 block">Title</label>
+              <Label className="text-sm font-medium mb-1 block">Title</Label>
               <Input
                 value={editForm.title}
                 onChange={(e) => setEditForm((f) => ({ ...f, title: e.target.value }))}
@@ -593,7 +836,7 @@ export default function RecruitmentDetail() {
               />
             </div>
             <div>
-              <label className="text-sm font-medium mb-1 block">Department</label>
+              <Label className="text-sm font-medium mb-1 block">Department</Label>
               <Input
                 value={editForm.department}
                 onChange={(e) => setEditForm((f) => ({ ...f, department: e.target.value }))}
@@ -601,7 +844,7 @@ export default function RecruitmentDetail() {
               />
             </div>
             <div>
-              <label className="text-sm font-medium mb-1 block">Start Date</label>
+              <Label className="text-sm font-medium mb-1 block">Start Date</Label>
               <Input
                 type="date"
                 value={editForm.startDate}
@@ -610,7 +853,7 @@ export default function RecruitmentDetail() {
               />
             </div>
             <div>
-              <label className="text-sm font-medium mb-1 block">Notes</label>
+              <Label className="text-sm font-medium mb-1 block">Notes</Label>
               <Textarea
                 value={editForm.notes}
                 onChange={(e) => setEditForm((f) => ({ ...f, notes: e.target.value }))}
@@ -618,9 +861,7 @@ export default function RecruitmentDetail() {
               />
             </div>
             <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setEditDialog(false)}>
-                Cancel
-              </Button>
+              <Button variant="outline" onClick={() => setEditDialog(false)}>Cancel</Button>
               <Button
                 onClick={() => updateRecruitmentMutation.mutate(editForm)}
                 disabled={updateRecruitmentMutation.isPending}
@@ -632,6 +873,80 @@ export default function RecruitmentDetail() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Add Step Dialog */}
+      <Dialog open={!!addStepPhase} onOpenChange={(open) => { if (!open) setAddStepPhase(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="font-display text-base">
+              Add Step to {addStepPhase?.split("(")[0].trim()}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="mt-2">
+            <StepFormFields form={addStepForm} setForm={setAddStepForm} />
+            <div className="flex justify-end gap-2 mt-4">
+              <Button variant="outline" onClick={() => setAddStepPhase(null)}>Cancel</Button>
+              <Button
+                onClick={handleAddStepSubmit}
+                disabled={createStepMutation.isPending || !addStepForm.title.trim()}
+                data-testid="button-save-add-step"
+              >
+                {createStepMutation.isPending ? "Adding..." : "Add Step"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Step Dialog */}
+      <Dialog open={!!editStepTarget} onOpenChange={(open) => { if (!open) setEditStepTarget(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="font-display text-base">
+              Edit Step: {editStepTarget?.title}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="mt-2">
+            <StepFormFields form={editStepForm} setForm={setEditStepForm} />
+            <div className="flex justify-end gap-2 mt-4">
+              <Button variant="outline" onClick={() => setEditStepTarget(null)}>Cancel</Button>
+              <Button
+                onClick={handleEditStepSubmit}
+                disabled={editStepMutation.isPending || !editStepForm.title.trim()}
+                data-testid="button-save-edit-step"
+              >
+                {editStepMutation.isPending ? "Saving..." : "Save Changes"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Step Confirmation */}
+      <AlertDialog open={!!deleteStepTarget} onOpenChange={(open) => { if (!open) setDeleteStepTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Step</AlertDialogTitle>
+            <AlertDialogDescription>
+              Remove "{deleteStepTarget?.title}" from this recruitment? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                if (deleteStepTarget) {
+                  deleteStepMutation.mutate(deleteStepTarget.id);
+                }
+              }}
+              data-testid="button-confirm-delete-step"
+            >
+              {deleteStepMutation.isPending ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

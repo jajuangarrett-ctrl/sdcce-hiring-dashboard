@@ -193,6 +193,123 @@ export async function registerRoutes(
     }
   });
 
+  // POST /api/recruitments/:id/steps - add a new step
+  app.post("/api/recruitments/:id/steps", (req, res) => {
+    try {
+      const recruitmentId = parseInt(req.params.id);
+      const recruitment = storage.getRecruitment(recruitmentId);
+      if (!recruitment) {
+        return res.status(404).json({ error: "Recruitment not found" });
+      }
+
+      const { phase, title, description, forms, responsible, approver, estimatedDays, notes, afterStepNumber } = req.body;
+      if (!phase || !title) {
+        return res.status(400).json({ error: "phase and title are required" });
+      }
+
+      // Determine the step number for the new step
+      const existingSteps = storage.getStepsForRecruitment(recruitmentId);
+      let newStepNumber: number;
+
+      if (afterStepNumber !== undefined && afterStepNumber !== null) {
+        // Insert after a specific step
+        newStepNumber = afterStepNumber + 1;
+        // Shift subsequent steps' numbers up
+        for (const s of existingSteps) {
+          if (s.stepNumber >= newStepNumber) {
+            storage.updateStep(s.id, { stepNumber: s.stepNumber + 1 } as any);
+          }
+        }
+      } else {
+        // Find the last step number in this phase, or overall
+        const phaseSteps = existingSteps.filter((s) => s.phase === phase);
+        if (phaseSteps.length > 0) {
+          const lastInPhase = phaseSteps[phaseSteps.length - 1].stepNumber;
+          newStepNumber = lastInPhase + 1;
+          // Shift subsequent steps
+          for (const s of existingSteps) {
+            if (s.stepNumber >= newStepNumber) {
+              storage.updateStep(s.id, { stepNumber: s.stepNumber + 1 } as any);
+            }
+          }
+        } else {
+          newStepNumber = existingSteps.length > 0
+            ? Math.max(...existingSteps.map((s) => s.stepNumber)) + 1
+            : 1;
+        }
+      }
+
+      const step = storage.createStep({
+        recruitmentId,
+        stepNumber: newStepNumber,
+        phase,
+        title,
+        description: description || null,
+        forms: forms ? JSON.stringify(forms) : "[]",
+        responsible: responsible || null,
+        approver: approver || null,
+        estimatedDays: estimatedDays || 1,
+        status: "pending",
+        notes: notes || null,
+      });
+
+      // Recalculate projected dates
+      const allSteps = storage.getStepsForRecruitment(recruitmentId);
+      const stepsWithDates = calculateProjectedDates(recruitment.startDate, allSteps);
+      for (const s of stepsWithDates) {
+        storage.updateStep(s.id, {
+          projectedStartDate: s.projectedStartDate,
+          projectedEndDate: s.projectedEndDate,
+        });
+      }
+
+      const freshStep = storage.getStep(step.id);
+      res.status(201).json(freshStep);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // DELETE /api/recruitments/:id/steps/:stepId - delete a step
+  app.delete("/api/recruitments/:id/steps/:stepId", (req, res) => {
+    try {
+      const recruitmentId = parseInt(req.params.id);
+      const stepId = parseInt(req.params.stepId);
+      const step = storage.getStep(stepId);
+      if (!step || step.recruitmentId !== recruitmentId) {
+        return res.status(404).json({ error: "Step not found" });
+      }
+
+      const deletedStepNumber = step.stepNumber;
+      storage.deleteStep(stepId);
+
+      // Re-number subsequent steps
+      const remainingSteps = storage.getStepsForRecruitment(recruitmentId);
+      for (const s of remainingSteps) {
+        if (s.stepNumber > deletedStepNumber) {
+          storage.updateStep(s.id, { stepNumber: s.stepNumber - 1 } as any);
+        }
+      }
+
+      // Recalculate projected dates
+      const recruitment = storage.getRecruitment(recruitmentId);
+      if (recruitment) {
+        const freshSteps = storage.getStepsForRecruitment(recruitmentId);
+        const stepsWithDates = calculateProjectedDates(recruitment.startDate, freshSteps);
+        for (const s of stepsWithDates) {
+          storage.updateStep(s.id, {
+            projectedStartDate: s.projectedStartDate,
+            projectedEndDate: s.projectedEndDate,
+          });
+        }
+      }
+
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // PATCH /api/recruitments/:id/steps/:stepId - update a step
   app.patch("/api/recruitments/:id/steps/:stepId", (req, res) => {
     try {

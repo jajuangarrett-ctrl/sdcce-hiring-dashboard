@@ -367,4 +367,102 @@ export const localStore = {
 
     return allSteps[idx];
   },
+
+  createStep(recruitmentId: number, body: {
+    phase: string;
+    title: string;
+    description?: string | null;
+    forms?: string[];
+    responsible?: string | null;
+    approver?: string | null;
+    estimatedDays?: number;
+    notes?: string | null;
+    afterStepNumber?: number | null;
+  }) {
+    const allSteps = load<LocalStep[]>(KEYS.steps, []);
+    const mySteps = allSteps.filter((s) => s.recruitmentId === recruitmentId).sort((a, b) => a.stepNumber - b.stepNumber);
+    const otherSteps = allSteps.filter((s) => s.recruitmentId !== recruitmentId);
+
+    let newStepNumber: number;
+    if (body.afterStepNumber !== undefined && body.afterStepNumber !== null) {
+      newStepNumber = body.afterStepNumber + 1;
+      for (const s of mySteps) {
+        if (s.stepNumber >= newStepNumber) s.stepNumber++;
+      }
+    } else {
+      const phaseSteps = mySteps.filter((s) => s.phase === body.phase);
+      if (phaseSteps.length > 0) {
+        newStepNumber = phaseSteps[phaseSteps.length - 1].stepNumber + 1;
+        for (const s of mySteps) {
+          if (s.stepNumber >= newStepNumber) s.stepNumber++;
+        }
+      } else {
+        newStepNumber = mySteps.length > 0 ? Math.max(...mySteps.map((s) => s.stepNumber)) + 1 : 1;
+      }
+    }
+
+    const newStep: LocalStep = {
+      id: getNextId(KEYS.nextStepId),
+      recruitmentId,
+      stepNumber: newStepNumber,
+      phase: body.phase,
+      title: body.title,
+      description: body.description || null,
+      forms: JSON.stringify(body.forms || []),
+      responsible: body.responsible || null,
+      approver: body.approver || null,
+      estimatedDays: body.estimatedDays || 1,
+      actualDays: null,
+      projectedStartDate: null,
+      projectedEndDate: null,
+      completedDate: null,
+      status: "pending",
+      notes: body.notes || null,
+    };
+
+    mySteps.push(newStep);
+    mySteps.sort((a, b) => a.stepNumber - b.stepNumber);
+
+    // Recalculate projected dates
+    const recruitments = load<LocalRecruitment[]>(KEYS.recruitments, []);
+    const recruitment = recruitments.find((r) => r.id === recruitmentId);
+    if (recruitment) {
+      const recalculated = calculateProjectedDates(recruitment.startDate, mySteps);
+      save(KEYS.steps, [...otherSteps, ...recalculated]);
+      return recalculated.find((s) => s.id === newStep.id) || newStep;
+    }
+
+    save(KEYS.steps, [...otherSteps, ...mySteps]);
+    return newStep;
+  },
+
+  deleteStep(recruitmentId: number, stepId: number) {
+    const allSteps = load<LocalStep[]>(KEYS.steps, []);
+    const step = allSteps.find((s) => s.id === stepId && s.recruitmentId === recruitmentId);
+    if (!step) return null;
+
+    const deletedNumber = step.stepNumber;
+    const remaining = allSteps.filter((s) => !(s.id === stepId && s.recruitmentId === recruitmentId));
+
+    // Re-number subsequent steps
+    for (const s of remaining) {
+      if (s.recruitmentId === recruitmentId && s.stepNumber > deletedNumber) {
+        s.stepNumber--;
+      }
+    }
+
+    // Recalculate projected dates
+    const recruitments = load<LocalRecruitment[]>(KEYS.recruitments, []);
+    const recruitment = recruitments.find((r) => r.id === recruitmentId);
+    if (recruitment) {
+      const mySteps = remaining.filter((s) => s.recruitmentId === recruitmentId);
+      const otherSteps = remaining.filter((s) => s.recruitmentId !== recruitmentId);
+      const recalculated = calculateProjectedDates(recruitment.startDate, mySteps);
+      save(KEYS.steps, [...otherSteps, ...recalculated]);
+    } else {
+      save(KEYS.steps, remaining);
+    }
+
+    return { success: true };
+  },
 };

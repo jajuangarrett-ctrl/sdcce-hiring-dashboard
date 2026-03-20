@@ -73,11 +73,26 @@ async function routeLocal(method: string, url: string, data?: unknown): Promise<
     if (method === "DELETE") return store.deleteRecruitment(id);
   }
 
+  // POST /api/recruitments/:id/steps — create a new step
+  const createStepMatch = url.match(/^\/api\/recruitments\/(\d+)\/steps$/);
+  if (method === "POST" && createStepMatch) {
+    return store.createStep(parseInt(createStepMatch[1]), data as any);
+  }
+
   const stepMatch = url.match(/^\/api\/recruitments\/(\d+)\/steps\/(\d+)$/);
-  if (method === "PATCH" && stepMatch) {
-    const r = store.updateStep(parseInt(stepMatch[1]), parseInt(stepMatch[2]), data as any);
-    if (!r) throw new Error("404: Step not found");
-    return r;
+  if (stepMatch) {
+    const rId = parseInt(stepMatch[1]);
+    const sId = parseInt(stepMatch[2]);
+    if (method === "PATCH") {
+      const r = store.updateStep(rId, sId, data as any);
+      if (!r) throw new Error("404: Step not found");
+      return r;
+    }
+    if (method === "DELETE") {
+      const r = store.deleteStep(rId, sId);
+      if (!r) throw new Error("404: Step not found");
+      return r;
+    }
   }
 
   throw new Error(`Unknown local route: ${method} ${url}`);
