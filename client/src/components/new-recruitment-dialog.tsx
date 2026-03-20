@@ -45,7 +45,7 @@ export function NewRecruitmentDialog({ open, onOpenChange }: NewRecruitmentDialo
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onOpenChange(false);
       setForm({ title: "", department: "", startDate: today, notes: "" });
-      toast({ title: "Recruitment created", description: `${data.title} has been created with 26 steps.` });
+      toast({ title: "Recruitment created", description: `${data.title} has been created with 36 steps.` });
       navigate(`/${data.id}`);
     },
     onError: (error: Error) => {
@@ -62,7 +62,7 @@ export function NewRecruitmentDialog({ open, onOpenChange }: NewRecruitmentDialo
           <DialogTitle className="font-display">New Recruitment</DialogTitle>
         </DialogHeader>
         <p className="text-sm text-muted-foreground">
-          Create a new contract faculty recruitment. All 26 hiring process steps will be
+          Create a new contract faculty recruitment. All 36 hiring process steps will be
           automatically populated from the SDCCD template.
         </p>
         <div className="space-y-4 mt-2">
